@@ -492,10 +492,12 @@ async function connectWallet() {
 }
 
 async function checkNetwork() {
-  if (!window.ethereum) return;
+  if (!window.ethereum) return true;
   const chainId = await window.ethereum.request({ method: 'eth_chainId' });
   const warn = document.getElementById('net-warning');
-  if (chainId !== FIL_CHAIN_ID) {
+  // Only show warning if wallet is connected AND on wrong chain
+  const connected = !!walletAddr;
+  if (connected && chainId !== FIL_CHAIN_ID) {
     warn.classList.add('show');
   } else {
     warn.classList.remove('show');
