@@ -190,7 +190,7 @@ tbody tr:hover td { background:var(--bg); }
       <div class="stat-sub">FIL to claim all</div>
     </div>
     <div class="stat">
-      <div class="stat-label">Rate (USDFC/FIL)</div>
+      <div class="stat-label">Rate (FIL/USDFC)</div>
       <div class="stat-value" id="s-rate">—</div>
       <div class="stat-sub" id="ss-rate">vs market</div>
     </div>
@@ -389,7 +389,7 @@ function tick() {
   document.getElementById('decay-fill').style.width = decayPct.toFixed(1) + '%';
 
   // Implied rate + verdict
-  const implied = pool > 0 && price > 0 ? pool / price : 0;
+  const implied = pool > 0 && price > 0 ? price / pool : 0;
   const rateEl  = document.getElementById('s-rate');
   rateEl.textContent = implied > 0 ? implied.toFixed(3) : '—';
 
