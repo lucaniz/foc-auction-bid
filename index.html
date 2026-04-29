@@ -618,7 +618,9 @@ async function loadHistory() {
     const rate  = fil / usdfc;
     let cls = 'neu';
     if (filUSD) {
-      const p = (rate/filUSD - 1)*100;
+      // rate = FIL/USDFC, market rate = 1/filUSD FIL per USDFC
+      // profitable if rate < 1/filUSD (paid fewer FIL than market)
+      const p = (1 - rate * filUSD) * 100;
       cls = p >= 5 ? 'good' : p >= -5 ? 'neu' : 'bad';
     }
     return `<tr>
