@@ -40,8 +40,10 @@ body { font-family:var(--sans); background:var(--bg); color:var(--text); font-si
 .refresh-btn:hover { border-color:var(--blue); color:var(--blue); }
 
 /* NETWORK WARNING */
-.net-warning { background:var(--orange-bg); border:1px solid #fed7aa; border-radius:var(--r); padding:12px 16px; margin:20px 32px 0; font-size:13px; color:var(--orange); display:none; }
-.net-warning.show { display:block; }
+.net-warning { background:var(--orange-bg); border:1px solid #fed7aa; border-radius:var(--r); padding:12px 16px; margin:20px 32px 0; font-size:13px; color:var(--orange); display:none; align-items:center; justify-content:space-between; gap:12px; }
+.net-warning.show { display:flex; }
+.net-warning-btn { background:var(--orange); color:#fff; border:none; border-radius:6px; padding:6px 14px; font-size:12px; font-weight:600; cursor:pointer; font-family:var(--sans); }
+.net-warning-btn:hover { background:#c2410c; }
 
 /* PAGE */
 .page { padding:24px 32px; max-width:960px; margin:0 auto; }
@@ -172,7 +174,8 @@ tbody tr:hover td { background:var(--bg); }
 </div>
 
 <div class="net-warning" id="net-warning">
-  ⚠ Please switch to <strong>Filecoin Mainnet</strong> (Chain ID 314) in your wallet.
+  <span>⚠ Wallet is on the wrong network. This dApp requires <strong>Filecoin Mainnet</strong> (Chain ID 314).</span>
+  <button class="net-warning-btn" onclick="switchToFilecoin()">Switch network</button>
 </div>
 
 <div class="page">
@@ -303,11 +306,21 @@ tbody tr:hover td { background:var(--bg); }
 const FOC           = 'https://foc-observer.va.gg';
 const USDFC         = '0x80B98d3aa09ffff255c3ba4A241111Ff1262F045';
 const FP_CONTRACT   = '0x23b1e018F08BB982348b15a86ee926eEBf7F4DAa'; // FilecoinPayV1 mainnet
-const FIL_CHAIN_ID  = '0x13a'; // 314 decimal
-const HALVING       = 302400;  // 3.5 days in seconds
+const FIL_CHAIN_ID_HEX = '0x13a';   // 314 hex (canonical)
+const FIL_CHAIN_ID_DEC = 314;       // 314 decimal (for robust comparison)
+const HALVING       = 302400;       // 3.5 days in seconds
 
 // burnForFees(address token, address recipient, uint256 requested) = 0x1a257300
 const BURN_SELECTOR = '1a257300';
+
+// Filecoin Mainnet network params (used for wallet_addEthereumChain fallback)
+const FIL_NETWORK_PARAMS = {
+  chainId: FIL_CHAIN_ID_HEX,
+  chainName: 'Filecoin Mainnet',
+  nativeCurrency: { name: 'Filecoin', symbol: 'FIL', decimals: 18 },
+  rpcUrls: ['https://api.node.glif.io/rpc/v1'],
+  blockExplorerUrls: ['https://filecoin.blockscout.com']
+};
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let auctionData  = null;
@@ -472,7 +485,75 @@ function setSlipCustom(val) {
   updateBidSummary();
 }
 
+// ── Network: robust check + automatic switch ──────────────────────────────────
+async function getCurrentChainIdDec() {
+  if (!window.ethereum) return null;
+  const hex = await window.ethereum.request({ method: 'eth_chainId' });
+  return parseInt(hex, 16);
+}
+
+async function checkNetwork() {
+  if (!window.ethereum) return true;
+  const chainDec = await getCurrentChainIdDec();
+  const isCorrect = chainDec === FIL_CHAIN_ID_DEC;
+  const warn = document.getElementById('net-warning');
+  // Only show warning if wallet is connected AND on wrong chain
+  if (walletAddr && !isCorrect) {
+    warn.classList.add('show');
+  } else {
+    warn.classList.remove('show');
+  }
+  return isCorrect;
+}
+
+// Tries to switch to Filecoin Mainnet. If the chain is unknown to the wallet,
+// falls back to wallet_addEthereumChain. Returns true on success.
+async function switchToFilecoin() {
+  if (!window.ethereum) {
+    showStatus('error', 'No wallet detected.');
+    return false;
+  }
+  try {
+    await window.ethereum.request({
+      method: 'wallet_switchEthereumChain',
+      params: [{ chainId: FIL_CHAIN_ID_HEX }],
+    });
+    return true;
+  } catch (err) {
+    // 4902 = chain not added yet; 4001 = user rejected
+    if (err && (err.code === 4902 || err.code === -32603)) {
+      try {
+        await window.ethereum.request({
+          method: 'wallet_addEthereumChain',
+          params: [FIL_NETWORK_PARAMS],
+        });
+        return true;
+      } catch (addErr) {
+        showStatus('error', 'Could not add Filecoin Mainnet to your wallet: '
+          + (addErr.message || JSON.stringify(addErr)));
+        return false;
+      }
+    }
+    if (err && err.code === 4001) {
+      showStatus('error', 'Network switch rejected. You must be on Filecoin Mainnet to bid.');
+      return false;
+    }
+    showStatus('error', 'Failed to switch network: ' + (err.message || JSON.stringify(err)));
+    return false;
+  }
+}
+
 // ── Wallet ────────────────────────────────────────────────────────────────────
+function setConnectedUI(addr) {
+  document.getElementById('wallet-btn').className = 'wallet-btn connected';
+  document.getElementById('wallet-btn').innerHTML =
+    '<div class="wallet-dot"></div>' + addr.slice(0,6) + '…' + addr.slice(-4);
+}
+function setDisconnectedUI() {
+  document.getElementById('wallet-btn').className = 'wallet-btn disconnected';
+  document.getElementById('wallet-btn').innerHTML = 'Connect wallet';
+}
+
 async function connectWallet() {
   if (!window.ethereum) {
     showStatus('error', 'No wallet detected. Please install MetaMask or Rabby.');
@@ -481,28 +562,23 @@ async function connectWallet() {
   try {
     const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
     walletAddr = accounts[0];
-    document.getElementById('wallet-btn').className   = 'wallet-btn connected';
-    document.getElementById('wallet-btn').innerHTML   =
-      '<div class="wallet-dot"></div>' + walletAddr.slice(0,6) + '…' + walletAddr.slice(-4);
-    await checkNetwork();
+    setConnectedUI(walletAddr);
+
+    // Force-switch to Filecoin Mainnet right after connecting.
+    // This works around MetaMask's per-site network selection.
+    const onFilecoin = await checkNetwork();
+    if (!onFilecoin) {
+      await switchToFilecoin();
+      await checkNetwork();
+    }
     updateBidSummary();
   } catch(e) {
-    showStatus('error', 'Wallet connection rejected.');
+    if (e.code === 4001) {
+      showStatus('error', 'Wallet connection rejected.');
+    } else {
+      showStatus('error', 'Wallet connection failed: ' + (e.message || JSON.stringify(e)));
+    }
   }
-}
-
-async function checkNetwork() {
-  if (!window.ethereum) return true;
-  const chainId = await window.ethereum.request({ method: 'eth_chainId' });
-  const warn = document.getElementById('net-warning');
-  // Only show warning if wallet is connected AND on wrong chain
-  const connected = !!walletAddr;
-  if (connected && chainId !== FIL_CHAIN_ID) {
-    warn.classList.add('show');
-  } else {
-    warn.classList.remove('show');
-  }
-  return chainId === FIL_CHAIN_ID;
 }
 
 // Auto-reconnect
@@ -510,35 +586,41 @@ if (window.ethereum) {
   window.ethereum.request({ method: 'eth_accounts' }).then(accounts => {
     if (accounts.length > 0) {
       walletAddr = accounts[0];
-      document.getElementById('wallet-btn').className = 'wallet-btn connected';
-      document.getElementById('wallet-btn').innerHTML =
-        '<div class="wallet-dot"></div>' + accounts[0].slice(0,6) + '…' + accounts[0].slice(-4);
+      setConnectedUI(walletAddr);
       checkNetwork();
     }
   });
   window.ethereum.on('accountsChanged', accounts => {
     walletAddr = accounts[0] || null;
     if (walletAddr) {
-      document.getElementById('wallet-btn').className = 'wallet-btn connected';
-      document.getElementById('wallet-btn').innerHTML =
-        '<div class="wallet-dot"></div>' + walletAddr.slice(0,6) + '…' + walletAddr.slice(-4);
+      setConnectedUI(walletAddr);
     } else {
-      document.getElementById('wallet-btn').className = 'wallet-btn disconnected';
-      document.getElementById('wallet-btn').innerHTML = 'Connect wallet';
+      setDisconnectedUI();
     }
+    checkNetwork();
     updateBidSummary();
   });
-  window.ethereum.on('chainChanged', () => checkNetwork());
+  window.ethereum.on('chainChanged', () => {
+    checkNetwork();
+    updateBidSummary();
+  });
 }
 
 // ── Place bid ─────────────────────────────────────────────────────────────────
 async function placeBid() {
   if (!walletAddr || !auctionData) return;
 
-  const onCorrectNet = await checkNetwork();
+  // Make sure we're on Filecoin before sending the tx.
+  let onCorrectNet = await checkNetwork();
   if (!onCorrectNet) {
-    showStatus('error', 'Please switch to Filecoin Mainnet (Chain ID 314) before bidding.');
-    return;
+    showStatus('pending', 'Switching to Filecoin Mainnet…');
+    const ok = await switchToFilecoin();
+    if (!ok) return;
+    onCorrectNet = await checkNetwork();
+    if (!onCorrectNet) {
+      showStatus('error', 'Please switch to Filecoin Mainnet (Chain ID 314) before bidding.');
+      return;
+    }
   }
 
   const price  = currentPrice(auctionData.startPrice, parseInt(auctionData.startTime));
